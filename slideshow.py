@@ -148,12 +148,29 @@ def prepare_image(path: str, screen_w: int, screen_h: int) -> tuple:
     if box != (0, 0, img.width, img.height):
         img = img.crop(box)
 
-    # Detect face before scaling
-    focus_point = detect_face_focus(img)
+    # Detect face before scaling (operates on original image coordinates)
+    raw_focus = detect_face_focus(img)
 
     over_w = int(screen_w * KB_OVERSCAN)
     over_h = int(screen_h * KB_OVERSCAN)
     canvas, content_rect = fit_to_screen(img, over_w, over_h)
+
+    # Convert face position (fraction of image) → pan coordinate (fraction of pan range).
+    # In render_kb_frame, ox = cx + px * (cw - viewport_w), so px=0 puts the viewport's
+    # left edge at the content left, and px=1 puts it at the right.  To *center* the face
+    # we need: cx + px*(cw-vw) + vw/2 == cx + fx*cw  →  px = (fx*cw - vw/2) / (cw - vw)
+    focus_point = None
+    if raw_focus is not None:
+        fx, fy = raw_focus
+        _, _, cw, ch = content_rect
+        # Use zoom=1.0 viewport size for the conversion (conservative / largest viewport)
+        vw, vh = screen_w, screen_h
+        prx = cw - vw
+        pry = ch - vh
+        px = max(0.0, min(1.0, (fx * cw - vw / 2) / prx)) if prx > 0 else 0.5
+        py = max(0.0, min(1.0, (fy * ch - vh / 2) / pry)) if pry > 0 else 0.5
+        focus_point = (px, py)
+        print(f"  face detected: image=({fx:.2f},{fy:.2f}) → pan=({px:.2f},{py:.2f})")
 
     raw = canvas.tobytes("raw", "RGB")
     surface = pygame.image.fromstring(raw, canvas.size, "RGB")
@@ -171,12 +188,15 @@ def new_kb_params(focus_point=None) -> dict:
     if focus_point is not None:
         px0 = max(0.0, min(1.0, focus_point[0]))
         py0 = max(0.0, min(1.0, focus_point[1]))
+        # Small drift so the face stays in frame
+        max_drift = KB_PAN_DRIFT * 0.25
     else:
         px0 = random.random()
         py0 = random.random()
+        max_drift = KB_PAN_DRIFT
 
     angle = random.uniform(0, 2 * math.pi)
-    dist = random.uniform(KB_PAN_DRIFT * 0.5, KB_PAN_DRIFT)
+    dist = random.uniform(max_drift * 0.5, max_drift)
     px1 = max(0.0, min(1.0, px0 + math.cos(angle) * dist))
     py1 = max(0.0, min(1.0, py0 + math.sin(angle) * dist))
 
