@@ -72,20 +72,22 @@ def detect_black_borders(img: Image.Image) -> tuple:
     return (left, top, right + 1, bottom + 1)
 
 
-def zoom_crop_to_fit(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    """Scale image up so it fills target dimensions, then center-crop."""
+def fit_to_screen(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """Scale image to fit within screen, centered on a black background."""
     src_w, src_h = img.size
-    scale = max(target_w / src_w, target_h / src_h)
+    scale = min(target_w / src_w, target_h / src_h)
     new_w = int(src_w * scale)
     new_h = int(src_h * scale)
     img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - target_w) // 2
-    top = (new_h - target_h) // 2
-    return img.crop((left, top, left + target_w, top + target_h))
+    canvas = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+    offset_x = (target_w - new_w) // 2
+    offset_y = (target_h - new_h) // 2
+    canvas.paste(img, (offset_x, offset_y))
+    return canvas
 
 
 def prepare_image(path: str, screen_w: int, screen_h: int) -> pygame.Surface:
-    """Load, fix orientation, remove borders, zoom-crop, return a pygame Surface."""
+    """Load, fix orientation, remove borders, fit to screen, return a pygame Surface."""
     img = Image.open(path)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
@@ -94,7 +96,7 @@ def prepare_image(path: str, screen_w: int, screen_h: int) -> pygame.Surface:
     if box != (0, 0, img.width, img.height):
         img = img.crop(box)
 
-    img = zoom_crop_to_fit(img, screen_w, screen_h)
+    img = fit_to_screen(img, screen_w, screen_h)
 
     # Convert Pillow image → pygame Surface
     raw = img.tobytes("raw", "RGB")
