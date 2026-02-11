@@ -21,6 +21,8 @@ import sys
 import threading
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pygame
 from PIL import Image, ImageOps
 
@@ -85,6 +87,38 @@ def detect_black_borders(img: Image.Image) -> tuple:
     return (left, top, right + 1, bottom + 1)
 
 
+_face_cascade = None
+
+
+def _get_face_cascade():
+    global _face_cascade
+    if _face_cascade is None:
+        path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        _face_cascade = cv2.CascadeClassifier(path)
+    return _face_cascade
+
+
+def detect_face_focus(img: Image.Image):
+    """Return (fx, fy) center of largest detected face in [0,1], or None if no face found.
+    Runs on a downscaled copy for speed."""
+    cascade = _get_face_cascade()
+
+    # Downscale to max 800px wide for speed
+    w, h = img.size
+    scale = min(1.0, 800 / w)
+    small = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+
+    gray = np.array(small.convert("L"))
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    if len(faces) == 0:
+        return None
+
+    # Largest face by area
+    x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+    return ((x + fw / 2) / small.width, (y + fh / 2) / small.height)
+
+
 def fit_to_screen(img: Image.Image, target_w: int, target_h: int) -> tuple:
     """Scale image to fit within target, centered on black background.
     Returns (pil_image, content_rect) where content_rect is (x, y, w, h) of the image
@@ -103,8 +137,9 @@ def fit_to_screen(img: Image.Image, target_w: int, target_h: int) -> tuple:
 
 def prepare_image(path: str, screen_w: int, screen_h: int) -> tuple:
     """Load, fix orientation, remove borders, fit to oversized canvas.
-    Returns (surface, content_rect) where content_rect is (x, y, w, h) of the
-    actual image within the oversized canvas (the rest is black)."""
+    Returns (surface, content_rect, focus_point) where:
+      content_rect  — (x, y, w, h) of the actual image in the oversized canvas
+      focus_point   — (fx, fy) center of largest detected face in [0,1], or None"""
     img = Image.open(path)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
@@ -113,24 +148,33 @@ def prepare_image(path: str, screen_w: int, screen_h: int) -> tuple:
     if box != (0, 0, img.width, img.height):
         img = img.crop(box)
 
+    # Detect face before scaling
+    focus_point = detect_face_focus(img)
+
     over_w = int(screen_w * KB_OVERSCAN)
     over_h = int(screen_h * KB_OVERSCAN)
     canvas, content_rect = fit_to_screen(img, over_w, over_h)
 
     raw = canvas.tobytes("raw", "RGB")
     surface = pygame.image.fromstring(raw, canvas.size, "RGB")
-    return surface, content_rect
+    return surface, content_rect, focus_point
 
 
-def new_kb_params() -> dict:
-    """Generate random Ken Burns start/end zoom and pan parameters for one slide."""
+def new_kb_params(focus_point=None) -> dict:
+    """Generate Ken Burns start/end zoom and pan parameters for one slide.
+    If focus_point=(fx,fy) is given (face center in [0,1]), the pan starts
+    near the face and drifts slightly. Otherwise pan is fully random."""
     zoom_in = random.random() < 0.5
     z0 = 1.0 if zoom_in else 1.0 + KB_ZOOM_TRAVEL
     z1 = 1.0 + KB_ZOOM_TRAVEL if zoom_in else 1.0
 
-    # Start from a random position, drift a short distance in a random direction
-    px0 = random.random()
-    py0 = random.random()
+    if focus_point is not None:
+        px0 = max(0.0, min(1.0, focus_point[0]))
+        py0 = max(0.0, min(1.0, focus_point[1]))
+    else:
+        px0 = random.random()
+        py0 = random.random()
+
     angle = random.uniform(0, 2 * math.pi)
     dist = random.uniform(KB_PAN_DRIFT * 0.5, KB_PAN_DRIFT)
     px1 = max(0.0, min(1.0, px0 + math.cos(angle) * dist))
@@ -233,10 +277,10 @@ def main():
     def load_image(idx):
         path = photos[idx]
         try:
-            return prepare_image(path, screen_w, screen_h)  # (surface, content_rect)
+            return prepare_image(path, screen_w, screen_h)  # (surface, content_rect, focus_point)
         except Exception as e:
             print(f"Skipping {path}: {e}", file=sys.stderr)
-            return None, None
+            return None, None, None
 
     def preload(idx):
         """Load image in background thread and store in cache."""
@@ -257,9 +301,9 @@ def main():
     # --- initial state ---
 
     index = 0
-    current_surface, current_crect = get_image(index)
-    current_kb = new_kb_params()
-    next_surface, next_crect = None, None
+    current_surface, current_crect, current_focus = get_image(index)
+    current_kb = new_kb_params(current_focus)
+    next_surface, next_crect, next_focus = None, None, None
     next_kb = None
 
     # Preload next
@@ -274,7 +318,8 @@ def main():
     running = True
 
     def begin_transition():
-        nonlocal next_surface, next_crect, next_kb, trans_start, transitioning, frozen_frame, index
+        nonlocal next_surface, next_crect, next_focus, next_kb
+        nonlocal trans_start, transitioning, frozen_frame, index
         nonlocal slide_start, current_surface, current_crect, current_kb
 
         now = pygame.time.get_ticks()
@@ -286,15 +331,16 @@ def main():
             frozen_frame = None
 
         index = (index + 1) % len(photos)
-        next_surface, next_crect = get_image(index)
-        next_kb = new_kb_params()
+        next_surface, next_crect, next_focus = get_image(index)
+        next_kb = new_kb_params(next_focus)
         trans_start = pygame.time.get_ticks()
         transitioning = True
 
         preload((index + 1) % len(photos))
 
     def begin_transition_prev():
-        nonlocal next_surface, next_crect, next_kb, trans_start, transitioning, frozen_frame, index
+        nonlocal next_surface, next_crect, next_focus, next_kb
+        nonlocal trans_start, transitioning, frozen_frame, index
         nonlocal slide_start, current_surface, current_crect, current_kb
 
         now = pygame.time.get_ticks()
@@ -306,8 +352,8 @@ def main():
             frozen_frame = None
 
         index = (index - 1) % len(photos)
-        next_surface, next_crect = get_image(index)
-        next_kb = new_kb_params()
+        next_surface, next_crect, next_focus = get_image(index)
+        next_kb = new_kb_params(next_focus)
         trans_start = pygame.time.get_ticks()
         transitioning = True
 
@@ -349,7 +395,7 @@ def main():
                 current_surface = next_surface
                 current_crect = next_crect
                 current_kb = next_kb
-                next_surface, next_crect = None, None
+                next_surface, next_crect, next_focus = None, None, None
                 next_kb = None
                 frozen_frame = None
                 slide_start = trans_start
