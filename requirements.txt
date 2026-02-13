@@ -1,4 +1,4 @@
-pygame
-pillow
-opencv-python-headless
-numpy
+pygame>=2.5
+pillow>=10.0
+opencv-python-headless>=4.9
+numpy>=1.26

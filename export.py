@@ -80,11 +80,11 @@ def run_export(album_name, output_dir):
     Returns (success: bool, error_message: str).
     """
     safe = _escape(album_name)
-    posix = str(output_dir)
+    safe_posix = _escape(str(output_dir))
     script = f'''tell application "Photos"
     set theAlbum to album "{safe}"
     set theItems to media items of theAlbum
-    export theItems to POSIX file "{posix}" using originals true
+    export theItems to POSIX file "{safe_posix}" using originals true
 end tell'''
     result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
     return result.returncode == 0, result.stderr.strip()
@@ -305,6 +305,7 @@ def main():
             if not confirm("  Clear it and re-export?"):
                 print("Cancelled.")
                 sys.exit(130)
+            print(f"  {DIM}Deleting: {output_dir}{RESET}")
             shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
