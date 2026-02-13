@@ -17,6 +17,7 @@ Apple Photos' built-in slideshow is great, but it doesn't let you control how lo
 - Background image preloading for smooth transitions
 - Second screen / projector support
 - Loops indefinitely through the photo library
+- Built-in Apple Photos export — pick an album from the command line, no manual export needed
 
 ## Requirements
 
@@ -33,50 +34,72 @@ source venv/bin/activate
 pip install pygame pillow opencv-python-headless numpy
 ```
 
-## Exporting photos from Apple Photos
-
-Since this tool reads photos from a folder on disk, you'll need to export them from Apple Photos first:
-
-1. Open **Photos** and select the album or photos you want to use
-2. Go to **File → Export → Export Unmodified Originals** (to preserve full quality and HEIC format), or **File → Export → Export Photos** if you want to convert to JPEG
-3. Choose a destination folder
-4. Point `slideshow` at that folder
-
 ## Usage
 
-```bash
-./run.sh /path/to/exported/photos
-```
-
-Or directly:
+### Quickstart — export from Apple Photos and run immediately
 
 ```bash
-venv/bin/python3 slideshow.py /path/to/photos
+./run.sh --export-and-run
 ```
+
+This presents an interactive album picker, exports the photos to `~/Pictures/slideshow-photos`, then starts the slideshow automatically.
+
+### Export only
+
+```bash
+./run.sh --export
+```
+
+Exports the chosen album without starting the slideshow. Useful for preparing photos in advance or checking what was exported before running.
+
+### Run from an existing folder
+
+```bash
+./run.sh /path/to/photos
+```
+
+Skips export entirely — just runs the slideshow from a folder on disk. This is the mode to use once photos are already exported, and is the most stable option for long-running sessions.
 
 ### Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--delay N` | `7` | Seconds each slide is shown |
-| `--no-shuffle` | off | Show photos in alphabetical order instead of random |
-| `--display N` | `0` | Display index (0 = primary, 1 = second screen, etc.) |
+| Flag | Applies to | Default | Description |
+| ---- | --------- | ------- | ----------- |
+| `--output DIR` | export modes | `~/Pictures/slideshow-photos` | Where exported photos are saved |
+| `--delay N` | run modes | `7` | Seconds each slide is shown |
+| `--no-shuffle` | run modes | off | Show photos in alphabetical order instead of random |
+| `--display N` | run modes | `0` | Display index (0 = primary, 1 = second screen, etc.) |
 
 ### Examples
 
 ```bash
-# Slow, relaxed pace
-./run.sh ~/Photos --delay 10
+# Export and run on a second screen at a relaxed pace
+./run.sh --export-and-run --display 1 --delay 10
+
+# Export to a custom folder
+./run.sh --export --output ~/Desktop/family-photos
+
+# Run from a previously exported folder
+./run.sh ~/Pictures/slideshow-photos --delay 8
 
 # Fast-paced, alphabetical order
-./run.sh ~/Photos --delay 3 --no-shuffle
-
-# Send to a projector or second screen
-./run.sh ~/Photos --display 1
-
-# Second screen with a custom delay
-./run.sh ~/Photos --delay 5 --display 1
+./run.sh ~/Pictures/slideshow-photos --delay 3 --no-shuffle
 ```
+
+### What the export step does
+
+When you run `--export` or `--export-and-run`, the script:
+
+1. Connects to Photos and lists all your albums
+2. Lets you pick one by number
+3. Shows the photo count and estimated disk space required
+4. Checks you have enough free space, and warns if it looks tight
+5. Exports originals to the output folder, showing a live progress bar
+6. Notes any photos that couldn't be downloaded (e.g. iCloud-only items not available offline)
+
+On first run, macOS will prompt you to grant Photos library access — this is expected.
+
+> **Shared albums** (iCloud Shared Albums created by someone else) are not accessible via AppleScript and will not appear in the picker. Export these manually from Photos using **File → Export → Export Unmodified Originals**, then point `run.sh` at the exported folder.
+> **iCloud photos not cached locally** will be downloaded during export. For large albums where photos are stored in iCloud but not on device, the export may take significantly longer than usual.
 
 ## Controls
 
@@ -94,6 +117,7 @@ JPEG, PNG, GIF, BMP, TIFF, HEIC, WebP
 
 - Start the app **after** connecting an external display — the screen resolution is detected at launch and images are sized to match.
 - On macOS you may see a harmless `Class SDLApplication is implemented in both…` warning in the terminal. This is a known conflict between opencv's bundled SDL2 and pygame's copy, and does not affect the slideshow.
+- For long unattended sessions (e.g. event displays), the recommended workflow is to export first, verify the folder looks correct, then run `./run.sh /path/to/folder`. This keeps the display loop completely isolated from Photos.
 
 ## License
 
