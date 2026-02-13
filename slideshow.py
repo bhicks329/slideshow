@@ -6,6 +6,7 @@ Usage:
     ./run.sh /path/to/photos
     ./run.sh /path/to/photos --delay 10
     ./run.sh /path/to/photos --delay 5 --no-shuffle
+    ./run.sh /path/to/photos --display 1
 
 Controls:
     Right arrow / Space  — next photo
@@ -270,19 +271,32 @@ def main():
                         help="Seconds each slide is shown (default: 7)")
     parser.add_argument("--no-shuffle", action="store_true",
                         help="Show photos in alphabetical order")
+    parser.add_argument("--display", type=int, default=0,
+                        help="Display index to use (0 = primary, 1 = second screen, etc.)")
     args = parser.parse_args()
 
     photos = collect_photos(args.path)
     if not args.no_shuffle:
         random.shuffle(photos)
 
-    print(f"Found {len(photos)} photo(s). Starting slideshow (delay: {args.delay}s). "
-          "Press Q or Esc to quit.")
+    print(f"Found {len(photos)} photo(s). Starting slideshow (delay: {args.delay}s, "
+          f"display: {args.display}). Press Q or Esc to quit.")
+
+    os.environ.setdefault("SDL_VIDEO_FULLSCREEN_HEAD", str(args.display))
 
     pygame.init()
-    info = pygame.display.Info()
-    screen_w, screen_h = info.current_w, info.current_h
-    screen = pygame.display.set_mode((screen_w, screen_h), pygame.FULLSCREEN | pygame.NOFRAME)
+
+    num_displays = pygame.display.get_num_displays()
+    if args.display >= num_displays:
+        print(f"Display {args.display} not found ({num_displays} display(s) available). "
+              f"Using display 0.", file=sys.stderr)
+        args.display = 0
+
+    display_bounds = pygame.display.get_desktop_sizes()
+    screen_w, screen_h = display_bounds[args.display]
+    screen = pygame.display.set_mode(
+        (screen_w, screen_h), pygame.FULLSCREEN | pygame.NOFRAME, display=args.display
+    )
     pygame.display.set_caption("Slideshow")
     pygame.mouse.set_visible(False)
 
