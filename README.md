@@ -26,7 +26,7 @@ Apple Photos' built-in slideshow is great, but it doesn't let you control how lo
 ## Setup
 
 ```bash
-git clone https://github.com/your-username/slideshow.git
+git clone https://github.com/bhicks329/slideshow.git
 cd slideshow
 python3 -m venv venv
 source venv/bin/activate
