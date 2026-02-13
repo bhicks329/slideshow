@@ -33,10 +33,19 @@ source venv/bin/activate
 pip install pygame pillow opencv-python-headless numpy
 ```
 
+## Exporting photos from Apple Photos
+
+Since this tool reads photos from a folder on disk, you'll need to export them from Apple Photos first:
+
+1. Open **Photos** and select the album or photos you want to use
+2. Go to **File → Export → Export Unmodified Originals** (to preserve full quality and HEIC format), or **File → Export → Export Photos** if you want to convert to JPEG
+3. Choose a destination folder
+4. Point `slideshow` at that folder
+
 ## Usage
 
 ```bash
-./run.sh /path/to/photos
+./run.sh /path/to/exported/photos
 ```
 
 Or directly:
