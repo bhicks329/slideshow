@@ -96,6 +96,20 @@ def _escape(name):
 
 
 # ---------------------------------------------------------------------------
+# Colours
+# ---------------------------------------------------------------------------
+
+RESET  = "\033[0m"
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+CYAN   = "\033[96m"
+GREEN  = "\033[92m"
+YELLOW = "\033[93m"
+RED    = "\033[91m"
+SEP    = f"{DIM}{'─' * 44}{RESET}"
+
+
+# ---------------------------------------------------------------------------
 # UI helpers
 # ---------------------------------------------------------------------------
 
@@ -136,25 +150,27 @@ def _redraw(output_dir, total, bar_width, start, final=False):
     count = count_photo_files(output_dir)
     fraction = min(1.0, count / total) if total > 0 else 0
     filled = int(bar_width * fraction)
-    bar = "=" * filled + "-" * (bar_width - filled)
+    bar = f"{GREEN}{'█' * filled}{DIM}{'░' * (bar_width - filled)}{RESET}"
     elapsed = time.time() - start
-    suffix = " done" if final else "     "
-    print(f"\r  [{bar}] {count}/{total}  ({elapsed:.0f}s){suffix}", end="", flush=True)
+    suffix = f"  {GREEN}{BOLD}done ✓{RESET}" if final else "      "
+    print(f"\r  {bar}  {CYAN}{count}/{total}{RESET}  {DIM}({elapsed:.0f}s){RESET}{suffix}", end="", flush=True)
 
 
 def pick_album_interactive(albums):
     max_name = max(len(name) for name, _ in albums)
     col = max(max_name, 5)  # at least wide enough for "Album"
-    print(f"\n  {'#':>3}  {'Album':<{col}}  {'Photos':>6}  Est. size (~{AVG_PHOTO_SIZE_MB} MB/photo)")
-    print(f"  {'-'*3}  {'-'*col}  {'-'*6}  {'-'*9}")
+    print(f"\n{SEP}")
+    print(f"  {BOLD}{CYAN}{'#':>3}  {'Album':<{col}}  {'Photos':>6}  Est. size{RESET}  {DIM}(~{AVG_PHOTO_SIZE_MB} MB/photo){RESET}")
+    print(f"{SEP}")
     for i, (name, count) in enumerate(albums, 1):
         est = fmt_size(count * AVG_PHOTO_SIZE_MB * 1024 * 1024)
-        print(f"  {i:>3}.  {name:<{col}}  {count:>6}  ~{est}")
-    print()
+        num = f"{DIM}{i:>3}.{RESET}"
+        print(f"  {num}  {name:<{col}}  {CYAN}{count:>6}{RESET}  {DIM}~{est}{RESET}")
+    print(f"{SEP}\n")
 
     while True:
         try:
-            raw = input("  Enter album number: ").strip()
+            raw = input(f"  {BOLD}Enter album number:{RESET} ").strip()
             idx = int(raw) - 1
             if 0 <= idx < len(albums):
                 return albums[idx]
@@ -163,7 +179,7 @@ def pick_album_interactive(albums):
             print("  Please enter a valid number.")
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
-            sys.exit(0)
+            sys.exit(130)
 
 
 def confirm(prompt, default_no=True):
@@ -171,8 +187,8 @@ def confirm(prompt, default_no=True):
     try:
         answer = input(f"{prompt} {hint} ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        print()
-        return False
+        print("\nCancelled.")
+        sys.exit(130)
     if default_no:
         return answer == "y"
     return answer != "n"
@@ -197,29 +213,50 @@ def main():
     # ------------------------------------------------------------------
     # 1. Connect to Photos
     # ------------------------------------------------------------------
-    print("\nConnecting to Photos...", end="", flush=True)
+    print(f"\n{SEP}")
+    print(f"  {CYAN}Connecting to Photos...{RESET}", end="", flush=True)
     if not check_photos_accessible():
-        print(" failed.")
-        print("Error: Could not reach Photos. Make sure Photos is installed and not blocked.", file=sys.stderr)
+        print(f" {RED}failed.{RESET}")
+        print(f"{RED}Error: Could not reach Photos. Make sure Photos is installed and not blocked.{RESET}", file=sys.stderr)
         sys.exit(1)
-    print(" ok")
+    print(f" {GREEN}ok ✓{RESET}")
 
     # ------------------------------------------------------------------
     # 2. Fetch album list
     # ------------------------------------------------------------------
-    print("Fetching albums...", end="", flush=True)
-    try:
-        albums = get_albums()
-    except Exception as e:
-        print(f" failed.\nError: {e}", file=sys.stderr)
+    albums_result = [None]
+    albums_error = [None]
+
+    def _fetch():
+        try:
+            albums_result[0] = get_albums()
+        except Exception as e:
+            albums_error[0] = e
+
+    fetch_thread = threading.Thread(target=_fetch, daemon=True)
+    fetch_thread.start()
+
+    spinner = ["|", "/", "-", "\\"]
+    i = 0
+    while fetch_thread.is_alive():
+        print(f"\r  {CYAN}Fetching albums...{RESET} {spinner[i % len(spinner)]}", end="", flush=True)
+        i += 1
+        time.sleep(0.15)
+
+    fetch_thread.join()
+
+    if albums_error[0]:
+        print(f"\r  {CYAN}Fetching albums...{RESET} {RED}failed.{RESET}          ")
+        print(f"{RED}Error: {albums_error[0]}{RESET}", file=sys.stderr)
         sys.exit(1)
 
+    albums = albums_result[0]
     if not albums:
-        print(" none found.")
+        print(f"\r  {CYAN}Fetching albums...{RESET} {YELLOW}none found.{RESET}      ")
         print("No albums found in Photos.", file=sys.stderr)
         sys.exit(1)
 
-    print(f" {len(albums)} found")
+    print(f"\r  {CYAN}Fetching albums...{RESET} {GREEN}{len(albums)} found ✓{RESET}      ")
 
     # ------------------------------------------------------------------
     # 3. Pick album
@@ -236,10 +273,11 @@ def main():
     # ------------------------------------------------------------------
     # 4. Confirm selection and disk estimate
     # ------------------------------------------------------------------
-    print(f"\n  Album: {album_name}")
-    print(f"  Photos: {count}")
+    print(f"\n{SEP}")
+    print(f"  {BOLD}Album:{RESET}   {CYAN}{album_name}{RESET}")
+    print(f"  {BOLD}Photos:{RESET}  {CYAN}{count}{RESET}")
     estimated_bytes = count * AVG_PHOTO_SIZE_MB * 1024 * 1024
-    print(f"  Estimated size:  ~{fmt_size(estimated_bytes)} (originals, rough estimate)")
+    print(f"  {BOLD}Est. size:{RESET}  {DIM}~{fmt_size(estimated_bytes)} (originals, rough estimate){RESET}")
 
     # ------------------------------------------------------------------
     # 5. Disk space check
@@ -247,15 +285,15 @@ def main():
     check_path = output_dir.parent if not output_dir.exists() else output_dir
     try:
         free = shutil.disk_usage(check_path).free
-        print(f"  Free disk space:  {fmt_size(free)}")
+        print(f"  {BOLD}Free disk:{RESET}  {fmt_size(free)}")
         if free < estimated_bytes * 1.2:
-            print(f"\n  Warning: disk space may be tight "
-                  f"(need ~{fmt_size(estimated_bytes)}, have {fmt_size(free)}).")
+            print(f"\n  {YELLOW}Warning: disk space may be tight "
+                  f"(need ~{fmt_size(estimated_bytes)}, have {fmt_size(free)}).{RESET}")
             if not confirm("  Continue anyway?"):
                 print("Cancelled.")
-                sys.exit(0)
+                sys.exit(130)
     except Exception as e:
-        print(f"  (Could not check disk space: {e})")
+        print(f"  {DIM}(Could not check disk space: {e}){RESET}")
 
     # ------------------------------------------------------------------
     # 6. Prepare output directory
@@ -263,18 +301,19 @@ def main():
     if output_dir.exists():
         existing = count_photo_files(output_dir)
         if existing > 0:
-            print(f"\n  Output folder already has {existing} photo(s):\n    {output_dir}")
+            print(f"\n  {YELLOW}Output folder already has {existing} photo(s):{RESET}\n    {DIM}{output_dir}{RESET}")
             if not confirm("  Clear it and re-export?"):
                 print("Cancelled.")
-                sys.exit(0)
+                sys.exit(130)
             shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # 7. Export with live progress
     # ------------------------------------------------------------------
-    print(f"\n  Exporting to: {output_dir}")
-    print("  (Photos may prompt for permission on first run)\n")
+    print(f"{SEP}")
+    print(f"\n  {BOLD}Exporting to:{RESET} {DIM}{output_dir}{RESET}")
+    print(f"  {DIM}(Photos may prompt for permission on first run){RESET}\n")
 
     done_event = threading.Event()
     export_error = [None]
@@ -292,21 +331,29 @@ def main():
     t.join()
 
     if export_error[0]:
-        print(f"\n  Export error: {export_error[0]}", file=sys.stderr)
+        print(f"\n  {RED}Export error: {export_error[0]}{RESET}", file=sys.stderr)
         sys.exit(1)
 
     # ------------------------------------------------------------------
     # 8. Summary
     # ------------------------------------------------------------------
     final_count = count_photo_files(output_dir)
-    print(f"\n  {final_count} file(s) exported to:\n    {output_dir}")
+    print(f"\n{SEP}")
+    print(f"  {GREEN}{BOLD}{final_count} photo(s) exported ✓{RESET}")
+    print(f"  {DIM}{output_dir}{RESET}")
 
     if final_count < count:
-        print(f"\n  Note: {count - final_count} photo(s) missing — "
-              "they may be stored only in iCloud and couldn't be downloaded.")
+        print(f"\n  {YELLOW}Note: {count - final_count} photo(s) missing — "
+              f"they may be stored only in iCloud and couldn't be downloaded.{RESET}")
 
-    print(f"\n  To start the slideshow:\n    ./run.sh {output_dir}\n")
+    print(f"\n  {DIM}To start the slideshow:{RESET}")
+    print(f"  {CYAN}./run.sh {output_dir}{RESET}")
+    print(f"{SEP}\n")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(130)

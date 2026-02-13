@@ -29,14 +29,31 @@ Apple Photos' built-in slideshow is great, but it doesn't let you control how lo
 ```bash
 git clone https://github.com/bhicks329/slideshow.git
 cd slideshow
-python3 -m venv venv
-source venv/bin/activate
-pip install pygame pillow opencv-python-headless numpy
+```
+
+That's it. When you first run `./run.sh`, it will automatically:
+
+1. Check that Python 3.9+ is available (and suggest `brew install python` if not)
+2. Create a virtual environment in `venv/`
+3. Install all dependencies from `requirements.txt`
+
+To skip the setup check on subsequent runs:
+
+```bash
+./run.sh --skip-setup
 ```
 
 ## Usage
 
-### Quickstart — export from Apple Photos and run immediately
+### Quickstart — just run it
+
+```bash
+./run.sh
+```
+
+Runs the slideshow from `~/Pictures/slideshow-photos` (the default export folder) at 4 seconds per photo. Setup is handled automatically on first run.
+
+### Export from Apple Photos and run immediately
 
 ```bash
 ./run.sh --export-and-run
@@ -65,9 +82,10 @@ Skips export entirely — just runs the slideshow from a folder on disk. This is
 | Flag | Applies to | Default | Description |
 | ---- | --------- | ------- | ----------- |
 | `--output DIR` | export modes | `~/Pictures/slideshow-photos` | Where exported photos are saved |
-| `--delay N` | run modes | `7` | Seconds each slide is shown |
+| `--delay N` | run modes | `4` | Seconds each slide is shown |
 | `--no-shuffle` | run modes | off | Show photos in alphabetical order instead of random |
 | `--display N` | run modes | `0` | Display index (0 = primary, 1 = second screen, etc.) |
+| `--skip-setup` | all modes | off | Skip Python environment checks |
 
 ### Examples
 

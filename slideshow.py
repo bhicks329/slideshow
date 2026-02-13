@@ -20,6 +20,7 @@ import os
 import random
 import sys
 import threading
+import time
 from pathlib import Path
 
 import cv2
@@ -171,7 +172,6 @@ def prepare_image(path: str, screen_w: int, screen_h: int) -> tuple:
         px = max(0.0, min(1.0, (fx * cw - vw / 2) / prx)) if prx > 0 else 0.5
         py = max(0.0, min(1.0, (fy * ch - vh / 2) / pry)) if pry > 0 else 0.5
         focus_point = (px, py)
-        print(f"  face detected: image=({fx:.2f},{fy:.2f}) → pan=({px:.2f},{py:.2f})")
 
     raw = canvas.tobytes("raw", "RGB")
     surface = pygame.image.fromstring(raw, canvas.size, "RGB")
@@ -267,7 +267,7 @@ def collect_photos(path: str) -> list:
 def main():
     parser = argparse.ArgumentParser(description="Full-screen photo slideshow")
     parser.add_argument("path", help="Photo file or folder")
-    parser.add_argument("--delay", type=float, default=7.0,
+    parser.add_argument("--delay", type=float, default=4.0,
                         help="Seconds each slide is shown (default: 7)")
     parser.add_argument("--no-shuffle", action="store_true",
                         help="Show photos in alphabetical order")
@@ -279,8 +279,18 @@ def main():
     if not args.no_shuffle:
         random.shuffle(photos)
 
-    print(f"Found {len(photos)} photo(s). Starting slideshow (delay: {args.delay}s, "
-          f"display: {args.display}). Press Q or Esc to quit.")
+    CYAN  = "\033[96m"
+    BOLD  = "\033[1m"
+    DIM   = "\033[2m"
+    RESET = "\033[0m"
+    SEP   = f"{DIM}{'─' * 40}{RESET}"
+
+    print(SEP)
+    print(f"{BOLD}{CYAN}  Found {len(photos)} photo(s).{RESET}  {DIM}delay: {args.delay}s · display: {args.display} · Q/Esc to quit{RESET}")
+    for i in range(5, -1, -1):
+        print(f"\r{CYAN}  Starting slideshow in {i}...{RESET}", end="", flush=True)
+        time.sleep(1)
+    print(f"\n{SEP}")
 
     os.environ.setdefault("SDL_VIDEO_FULLSCREEN_HEAD", str(args.display))
 
