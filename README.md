@@ -1,5 +1,7 @@
 # slideshow
 
+> **Fork notice:** This is a fork of [bhicks329/slideshow](https://github.com/bhicks329/slideshow) by Ben Hicks. It adds a browser GUI for picking photos, exporting albums and controlling the running slideshow, pause and live delay changes, smoother GPU-rendered Ken Burns motion, and fixes for multi-monitor setups on macOS.
+
 A fullscreen photo slideshow for macOS with Ken Burns pan/zoom effects, cross-fade transitions, and optional face-detection-guided panning.
 
 ## Background
@@ -9,25 +11,31 @@ Apple Photos' built-in slideshow is great, but it doesn't let you control how lo
 ## Features
 
 - Configurable slide delay (seconds per photo)
-- Ken Burns effect — gentle pan and slight zoom on every image
+- Ken Burns effect — gentle pan and slight zoom on every image, rendered on the GPU with sub-pixel precision and synced to the display's refresh rate
 - 1-second cross-fade transition between slides
 - Face detection (Haar cascade) — when a face is found, the pan starts centered on it
 - Automatic black-border removal (e.g. screenshots with letterboxing)
 - EXIF orientation correction
 - Background image preloading for smooth transitions
-- Second screen / projector support
+- Second screen / projector support — the slideshow stays visible while you use your other screens
+- Pause and change the delay while it runs
 - Loops indefinitely through the photo library
-- Built-in Apple Photos export — pick an album from the command line, no manual export needed
+- Built-in Apple Photos export — pick an album in the GUI or from the command line, no manual export needed
+- Browser GUI to pick photos, export albums and control the running slideshow
+
+<p align="center">
+  <img src="doc/assets/gui-example.png" alt="Slideshow GUI in the browser" width="480">
+</p>
 
 ## Requirements
 
-- macOS (tested on Sequoia)
+- macOS (tested on Tahoe 26.6.2)
 - Python 3.9+
 
 ## Setup
 
 ```bash
-git clone https://github.com/bhicks329/slideshow.git
+git clone https://github.com/TheNaderio/slideshow.git
 cd slideshow
 ```
 
@@ -44,6 +52,20 @@ To skip the setup check on subsequent runs:
 ```
 
 ## Usage
+
+### GUI
+
+```bash
+./run.sh --gui
+```
+
+Or double-click `Slideshow.command` in Finder. This opens a page in your browser where you can:
+
+- pick a photo folder, or export an Apple Photos album with a progress bar
+- set the delay, display and shuffle order (remembered for next time)
+- start the slideshow and control it while it runs: previous, pause, next, change the delay, stop — without touching the slideshow screen
+
+The GUI is served on `127.0.0.1` only and every request needs a random per-session token from the URL, so it isn't reachable from the network or from other websites. Settings are stored in `~/Library/Application Support/slideshow/settings.json`. Quit with **GUI beenden** on the page or Ctrl+C in the terminal.
 
 ### Quickstart — just run it
 
@@ -79,13 +101,14 @@ Skips export entirely — just runs the slideshow from a folder on disk. This is
 
 ### Options
 
-| Flag | Applies to | Default | Description |
-| ---- | --------- | ------- | ----------- |
-| `--output DIR` | export modes | `~/Pictures/slideshow-photos` | Where exported photos are saved |
-| `--delay N` | run modes | `4` | Seconds each slide is shown |
-| `--no-shuffle` | run modes | off | Show photos in alphabetical order instead of random |
-| `--display N` | run modes | `0` | Display index (0 = primary, 1 = second screen, etc.) |
-| `--skip-setup` | all modes | off | Skip Python environment checks |
+
+| Flag           | Applies to   | Default                       | Description                                          |
+| -------------- | ------------ | ----------------------------- | ---------------------------------------------------- |
+| `--output DIR` | export modes | `~/Pictures/slideshow-photos` | Where exported photos are saved                      |
+| `--delay N`    | run modes    | `4`                           | Seconds each slide is shown                          |
+| `--no-shuffle` | run modes    | off                           | Show photos in alphabetical order instead of random  |
+| `--display N`  | run modes    | `0`                           | Display index (0 = primary, 1 = second screen, etc.) |
+| `--skip-setup` | all modes    | off                           | Skip Python environment checks                       |
 
 ### Examples
 
@@ -121,11 +144,13 @@ On first run, macOS will prompt you to grant Photos library access — this is e
 
 ## Controls
 
-| Key | Action |
-|-----|--------|
-| Right arrow / Space | Next photo |
-| Left arrow | Previous photo |
-| Q / Escape | Quit |
+
+| Key                 | Action         |
+| ------------------- | -------------- |
+| Right arrow / Space | Next photo     |
+| Left arrow          | Previous photo |
+| P                   | Pause / resume |
+| Q / Escape          | Quit           |
 
 ## Supported formats
 

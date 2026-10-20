@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slideshow</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --border: #d2d2d7; --accent: #0071e3; --accent-text: #ffffff;
+    --danger: #d70015; --warn-bg: #fff4e5; --warn-text: #8a4b00; --track: #e5e5ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #1c1c1e; --text: #f5f5f7; --muted: #98989d;
+      --border: #38383a; --accent: #0a84ff; --accent-text: #ffffff;
+      --danger: #ff453a; --warn-bg: #3a2a10; --warn-text: #ffcc80; --track: #3a3a3c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 28px; margin: 0 0 24px; letter-spacing: -0.02em; }
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+       color: var(--muted); margin: 0 0 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+          padding: 18px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row + .row, .field + .field { margin-top: 14px; }
+  label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type=text], select {
+    flex: 1; min-width: 0; width: 100%; padding: 8px 10px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); cursor: pointer; white-space: nowrap;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text);
+                   font-weight: 600; }
+  button.big { width: 100%; padding: 12px; font-size: 16px; }
+  button.danger { color: var(--danger); }
+  .tabs { display: flex; background: var(--track); border-radius: 9px; padding: 2px; margin-bottom: 16px; }
+  .tabs button { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 6px; }
+  .tabs button.active { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.15); font-weight: 600; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .value { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+  .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+  .switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .bar { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; margin-top: 12px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .msg { font-size: 13px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; }
+  .msg.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .msg.warn { color: var(--warn-text); background: var(--warn-bg); }
+  .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 4px; }
+  .controls button { padding: 12px 0; font-size: 18px; }
+  .status { font-size: 15px; margin-bottom: 14px; }
+  .status small { display: block; color: var(--muted); font-size: 12px; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .hidden { display: none !important; }
+  footer { text-align: center; margin-top: 24px; }
+  footer button { border: 0; background: none; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Slideshow</h1>
+
+  <section class="card" id="control-card">
+    <h2>Läuft gerade</h2>
+    <div class="status" id="status">–</div>
+    <div class="controls">
+      <button id="btn-prev" title="Zurück">⏮</button>
+      <button id="btn-pause" title="Pause / Weiter">⏸</button>
+      <button id="btn-next" title="Weiter">⏭</button>
+      <button id="btn-stop" class="danger" title="Beenden">⏹</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Fotos</h2>
+    <div class="tabs">
+      <button id="tab-folder" data-source="folder">Ordner</button>
+      <button id="tab-photos" data-source="photos">Apple Fotos</button>
+    </div>
+
+    <div id="pane-folder">
+      <label class="lbl" for="folder">Ordner mit Fotos</label>
+      <div class="row">
+        <input type="text" id="folder" spellcheck="false">
+        <button id="choose-folder">Wählen…</button>
+      </div>
+    </div>
+
+    <div id="pane-photos" class="hidden">
+      <div class="field">
+        <label class="lbl" for="album">Album</label>
+        <div class="row">
+          <select id="album"><option value="">Alben werden geladen…</option></select>
+          <button id="reload-albums" title="Neu laden">↻</button>
+        </div>
+      </div>
+      <div class="field">
+        <label class="lbl" for="export-output">Exportieren nach</label>
+        <div class="row">
+          <input type="text" id="export-output" spellcheck="false">
+          <button id="choose-output">Wählen…</button>
+        </div>
+      </div>
+      <div class="field">
+        <button id="btn-export">Exportieren</button>
+      </div>
+      <div id="export-progress" class="hidden">
+        <div class="bar"><div id="export-bar"></div></div>
+        <div class="note" id="export-text"></div>
+      </div>
+      <div id="export-confirm" class="msg warn hidden">
+        <div id="export-confirm-text"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="confirm-clear" class="danger">Leeren und neu exportieren</button>
+          <button id="cancel-clear">Abbrechen</button>
+        </div>
+      </div>
+      <div class="note">Exportiert die Originale. Fotos, die nur in iCloud liegen, werden dabei geladen.</div>
+    </div>
+    <div id="source-msg" class="msg error hidden"></div>
+  </section>
+
+  <section class="card">
+    <h2>Einstellungen</h2>
+    <div class="field">
+      <label class="lbl" for="delay">Anzeigedauer pro Foto</label>
+      <div class="row">
+        <input type="range" id="delay" min="2" max="30" step="1">
+        <span class="value" id="delay-value"></span>
+      </div>
+    </div>
+    <div class="field">
+      <label class="lbl" for="display">Bildschirm</label>
+      <select id="display"></select>
+    </div>
+    <div class="field">
+      <label class="switch"><input type="checkbox" id="shuffle"> Zufällige Reihenfolge</label>
+    </div>
+  </section>
+
+  <button class="primary big" id="btn-start">Slideshow starten</button>
+  <div id="start-msg" class="msg error hidden"></div>
+
+  <footer><button id="btn-quit">GUI beenden</button></footer>
+</main>
+
+<script>
+"use strict";
+const token = location.hash.slice(1);
+const $ = (id) => document.getElementById(id);
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { "X-Token": token, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (e) {}
+  return { ok: res.ok, status: res.status, data };
+}
+
+function showMsg(el, text) {
+  el.textContent = text || "";
+  el.classList.toggle("hidden", !text);
+}
+
+let settings = null;
+let source = "folder";
+let albumsLoaded = false;
+let lastRunning = null;
+
+// --- settings ---
+
+let saveTimer = null;
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => api("POST", "/api/settings", {
+    source, folder: $("folder").value, album: $("album").value,
+    export_output: $("export-output").value, delay: Number($("delay").value),
+    display: Number($("display").value), shuffle: $("shuffle").checked,
+  }), 400);
+}
+
+function setSource(s) {
+  source = s;
+  $("tab-folder").classList.toggle("active", s === "folder");
+  $("tab-photos").classList.toggle("active", s === "photos");
+  $("pane-folder").classList.toggle("hidden", s !== "folder");
+  $("pane-photos").classList.toggle("hidden", s !== "photos");
+  showMsg($("source-msg"), "");
+  if (s === "photos" && !albumsLoaded) loadAlbums();
+}
+
+function formatSize(mb) {
+  return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
+}
+
+async function loadAlbums() {
+  const sel = $("album");
+  sel.innerHTML = "<option value=''>Alben werden geladen…</option>";
+  const { ok, data } = await api("GET", "/api/albums");
+  if (!ok) {
+    sel.innerHTML = "<option value=''>Keine Alben</option>";
+    showMsg($("source-msg"), data.error || "Alben konnten nicht geladen werden.");
+    return;
+  }
+  albumsLoaded = true;
+  sel.innerHTML = "";
+  for (const a of data.albums) {
+    const opt = document.createElement("option");
+    opt.value = a.name;
+    opt.textContent = `${a.name} · ${a.count} Fotos · ~${formatSize(a.count * data.mb_per_photo)}`;
+    sel.appendChild(opt);
+  }
+  if (settings.album && data.albums.some((a) => a.name === settings.album)) sel.value = settings.album;
+}
+
+// --- folder pickers ---
+
+async function pick(inputId) {
+  const { data } = await api("POST", "/api/choose-folder", { start: $(inputId).value });
+  if (data.path) { $(inputId).value = data.path; saveSettings(); }
+}
+
+// --- export ---
+
+async function startExport(clear) {
+  showMsg($("source-msg"), "");
+  $("export-confirm").classList.add("hidden");
+  const { ok, status, data } = await api("POST", "/api/export",
+    { album: $("album").value, output: $("export-output").value, clear });
+  if (status === 409 && data.needs_confirm) {
+    $("export-confirm-text").textContent =
+      `Im Ordner ${data.output} liegen schon ${data.existing} Fotos. Sie werden gelöscht und durch das Album ersetzt.`;
+    $("export-confirm").classList.remove("hidden");
+    return;
+  }
+  if (!ok) showMsg($("source-msg"), data.error || "Export konnte nicht gestartet werden.");
+}
+
+function renderExport(exp) {
+  const box = $("export-progress");
+  if (!exp.album) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const frac = exp.total ? Math.min(1, exp.done / exp.total) : 0;
+  $("export-bar").style.width = (frac * 100) + "%";
+  let text;
+  if (exp.running) text = `„${exp.album}“: ${exp.done} von ${exp.total} Fotos…`;
+  else if (exp.error) text = `Fehler: ${exp.error}`;
+  else {
+    text = `Fertig: ${exp.done} Fotos in ${exp.output}`;
+    if (exp.done < exp.total) text += ` (${exp.total - exp.done} fehlen, evtl. nur in iCloud)`;
+  }
+  $("export-text").textContent = text;
+  $("btn-export").disabled = exp.running;
+}
+
+// --- slideshow ---
+
+async function start() {
+  showMsg($("start-msg"), "");
+  const path = source === "folder" ? $("folder").value : $("export-output").value;
+  const { ok, data } = await api("POST", "/api/start", {
+    source, path, delay: Number($("delay").value),
+    display: Number($("display").value), shuffle: $("shuffle").checked,
+  });
+  if (!ok) showMsg($("start-msg"), data.error || "Start fehlgeschlagen.");
+}
+
+let paused = false;
+function control(action, value) { return api("POST", "/api/control", { action, value }); }
+
+function renderSlideshow(sl) {
+  const running = sl.running;
+  $("control-card").classList.toggle("hidden", !running);
+  $("btn-start").textContent = running ? "Mit diesen Einstellungen neu starten" : "Slideshow starten";
+  if (!running) { lastRunning = false; return; }
+  lastRunning = true;
+  const st = sl.status;
+  if (!st) { $("status").textContent = "Startet…"; return; }
+  paused = st.paused;
+  $("btn-pause").textContent = paused ? "▶" : "⏸";
+  $("status").innerHTML = "";
+  $("status").append(`Foto ${st.index + 1} von ${st.total}${paused ? " · pausiert" : ""}`);
+  const small = document.createElement("small");
+  small.textContent = st.photo;
+  $("status").append(small);
+}
+
+// --- init ---
+
+function fillDisplays(displays) {
+  const sel = $("display");
+  sel.innerHTML = "";
+  for (const d of displays) {
+    const opt = document.createElement("option");
+    opt.value = d.index;
+    opt.textContent = `Bildschirm ${d.index + 1}` + (d.width ? ` – ${d.width}×${d.height}` : "")
+      + (d.index === 0 ? " (Hauptbildschirm)" : "");
+    sel.appendChild(opt);
+  }
+}
+
+function updateDelayLabel() { $("delay-value").textContent = $("delay").value + " s"; }
+
+async function poll() {
+  const { ok, data } = await api("GET", "/api/state");
+  if (!ok) return;
+  renderSlideshow(data.slideshow);
+  renderExport(data.export);
+}
+
+async function init() {
+  const { ok, data } = await api("GET", "/api/state");
+  if (!ok) {
+    document.querySelector("main").innerHTML =
+      "<h1>Slideshow</h1><p>Kein Zugriff. Bitte die GUI über <code>./run.sh --gui</code> öffnen.</p>";
+    return;
+  }
+  settings = data.settings;
+  fillDisplays(data.displays);
+  $("folder").value = settings.folder;
+  $("export-output").value = settings.export_output;
+  $("delay").value = Math.round(settings.delay);
+  $("display").value = settings.display;
+  $("shuffle").checked = settings.shuffle;
+  updateDelayLabel();
+  setSource(settings.source);
+  renderSlideshow(data.slideshow);
+  renderExport(data.export);
+
+  $("tab-folder").onclick = () => { setSource("folder"); saveSettings(); };
+  $("tab-photos").onclick = () => { setSource("photos"); saveSettings(); };
+  $("choose-folder").onclick = () => pick("folder");
+  $("choose-output").onclick = () => pick("export-output");
+  $("reload-albums").onclick = loadAlbums;
+  $("btn-export").onclick = () => startExport(false);
+  $("confirm-clear").onclick = () => startExport(true);
+  $("cancel-clear").onclick = () => $("export-confirm").classList.add("hidden");
+  for (const id of ["folder", "export-output", "album", "display", "shuffle"]) $(id).onchange = saveSettings;
+  $("delay").oninput = updateDelayLabel;
+  $("delay").onchange = () => {
+    saveSettings();
+    if (lastRunning) control("delay", Number($("delay").value));
+  };
+  $("btn-start").onclick = start;
+  $("btn-prev").onclick = () => control("prev");
+  $("btn-next").onclick = () => control("next");
+  $("btn-pause").onclick = () => control(paused ? "resume" : "pause");
+  $("btn-stop").onclick = () => control("quit");
+  $("btn-quit").onclick = async () => {
+    await api("POST", "/api/quit", {});
+    document.querySelector("main").innerHTML =
+      "<h1>Slideshow</h1><p>Die GUI wurde beendet. Du kannst dieses Fenster schließen.</p>";
+    clearInterval(pollTimer);
+  };
+  pollTimer = setInterval(poll, 500);
+}
+
+let pollTimer = null;
+init();
+</script>
+</body>
+</html>

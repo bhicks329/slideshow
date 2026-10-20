@@ -129,6 +129,21 @@ def count_photo_files(directory):
         return 0
 
 
+def is_safe_to_clear(directory):
+    """Only allow deleting a folder that holds nothing but photos, and never a
+    top-level folder like ~ or ~/Pictures, so a mistyped path can't wipe data."""
+    path = Path(directory).expanduser().resolve()
+    home = Path.home().resolve()
+    if path in (Path("/"), home, home / "Pictures") or home.is_relative_to(path):
+        return False
+    try:
+        # .DS_Store appears once the folder is opened in Finder; .aae are Photos edit sidecars
+        return all(f.is_file() and (f.suffix.lower() in PHOTO_EXTENSIONS | {".aae"} or f.name == ".DS_Store")
+                   for f in path.iterdir())
+    except OSError:
+        return False
+
+
 def show_progress(output_dir, total, done_event):
     """
     Print a live progress bar by polling output_dir until done_event fires.
@@ -302,6 +317,10 @@ def main():
         existing = count_photo_files(output_dir)
         if existing > 0:
             print(f"\n  {YELLOW}Output folder already has {existing} photo(s):{RESET}\n    {DIM}{output_dir}{RESET}")
+            if not is_safe_to_clear(output_dir):
+                print(f"{RED}Error: refusing to clear a folder that contains other files or folders. "
+                      f"Choose an empty folder with --output.{RESET}", file=sys.stderr)
+                sys.exit(1)
             if not confirm("  Clear it and re-export?"):
                 print("Cancelled.")
                 sys.exit(130)

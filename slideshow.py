@@ -11,10 +11,14 @@ Usage:
 Controls:
     Right arrow / Space  — next photo
     Left arrow           — previous photo
+    P                    — pause / resume
     Q / Escape           — quit
 """
 
 import argparse
+import ctypes
+import json
+import ctypes.util
 import math
 import os
 import random
@@ -26,6 +30,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pygame
+from pygame._sdl2.video import Renderer, Texture
 from PIL import Image, ImageOps
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".webp"}
@@ -43,7 +48,6 @@ KB_ZOOM_TRAVEL = 0.08
 KB_PAN_DRIFT = 0.75
 
 TRANSITION_SECS = 1.0  # cross-fade duration
-FPS = 60
 
 
 def detect_black_borders(img: Image.Image) -> tuple:
@@ -90,6 +94,8 @@ def detect_black_borders(img: Image.Image) -> tuple:
 
 
 _face_cascade = None
+# The cascade is not thread-safe, and preload and manual skips can detect at the same time
+_face_lock = threading.Lock()
 
 
 def _get_face_cascade():
@@ -111,7 +117,8 @@ def detect_face_focus(img: Image.Image):
     small = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
 
     gray = np.array(small.convert("L"))
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    with _face_lock:
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
     if len(faces) == 0:
         return None
@@ -158,7 +165,7 @@ def prepare_image(path: str, screen_w: int, screen_h: int) -> tuple:
     canvas, content_rect = fit_to_screen(img, over_w, over_h)
 
     # Convert face position (fraction of image) → pan coordinate (fraction of pan range).
-    # In render_kb_frame, ox = cx + px * (cw - viewport_w), so px=0 puts the viewport's
+    # In kb_viewport, ox = cx + px * (cw - viewport_w), so px=0 puts the viewport's
     # left edge at the content left, and px=1 puts it at the right.  To *center* the face
     # we need: cx + px*(cw-vw) + vw/2 == cx + fx*cw  →  px = (fx*cw - vw/2) / (cw - vw)
     focus_point = None
@@ -174,7 +181,7 @@ def prepare_image(path: str, screen_w: int, screen_h: int) -> tuple:
         focus_point = (px, py)
 
     raw = canvas.tobytes("raw", "RGB")
-    surface = pygame.image.fromstring(raw, canvas.size, "RGB")
+    surface = pygame.image.frombytes(raw, canvas.size, "RGB")
     return surface, content_rect, focus_point
 
 
@@ -209,12 +216,13 @@ def new_kb_params(focus_point=None) -> dict:
     }
 
 
-def render_kb_frame(surface: pygame.Surface, screen_w: int, screen_h: int,
-                    t: float, kb: dict, content_rect: tuple) -> pygame.Surface:
+def kb_viewport(t: float, kb: dict, content_rect: tuple, canvas_size: tuple,
+                screen_w: int, screen_h: int) -> tuple:
     """
-    Return a (screen_w x screen_h) surface with Ken Burns pan/zoom applied.
+    Return the (x, y, w, h) part of the oversized canvas to show at time t, as floats
+    so pan and zoom move by fractions of a pixel instead of stepping.
     t: 0.0 (slide start) → 1.0 (slide end).
-    content_rect: (x, y, w, h) of the actual image within the oversized surface.
+    content_rect: (x, y, w, h) of the actual image within the oversized canvas.
     Pan is constrained to stay within content_rect so black borders never appear.
     """
     zoom = kb["zoom_start"] + (kb["zoom_end"] - kb["zoom_start"]) * t
@@ -224,30 +232,62 @@ def render_kb_frame(surface: pygame.Surface, screen_w: int, screen_h: int,
     cx, cy, cw, ch = content_rect
 
     # Viewport size: smaller = more zoomed in
-    viewport_w = int(screen_w / zoom)
-    viewport_h = int(screen_h / zoom)
+    viewport_w = screen_w / zoom
+    viewport_h = screen_h / zoom
 
     # Pan range within image content only
-    pan_range_x = max(0, cw - viewport_w)
-    pan_range_y = max(0, ch - viewport_h)
+    pan_range_x = max(0.0, cw - viewport_w)
+    pan_range_y = max(0.0, ch - viewport_h)
 
     # If viewport is wider/taller than the image, center on the image content
-    if pan_range_x > 0:
-        ox = cx + int(px * pan_range_x)
-    else:
-        ox = cx + (cw - viewport_w) // 2
+    ox = cx + px * pan_range_x if pan_range_x > 0 else cx + (cw - viewport_w) / 2
+    oy = cy + py * pan_range_y if pan_range_y > 0 else cy + (ch - viewport_h) / 2
 
-    if pan_range_y > 0:
-        oy = cy + int(py * pan_range_y)
-    else:
-        oy = cy + (ch - viewport_h) // 2
+    src_w, src_h = canvas_size
+    ox = max(0.0, min(src_w - viewport_w, ox))
+    oy = max(0.0, min(src_h - viewport_h, oy))
+    return ox, oy, viewport_w, viewport_h
 
-    src_w, src_h = surface.get_size()
-    ox = max(0, min(src_w - viewport_w, ox))
-    oy = max(0, min(src_h - viewport_h, oy))
 
-    crop = surface.subsurface((ox, oy, viewport_w, viewport_h))
-    return pygame.transform.smoothscale(crop, (screen_w, screen_h))
+def draw_kb_frame(texture, screen_w: int, screen_h: int, t: float, kb: dict,
+                  content_rect: tuple, alpha: int = 255):
+    """Draw texture with Ken Burns pan/zoom applied, filling the screen."""
+    ox, oy, vw, _ = kb_viewport(t, kb, content_rect, (texture.width, texture.height),
+                                screen_w, screen_h)
+    scale = screen_w / vw
+    texture.alpha = alpha
+    texture.draw(dstrect=pygame.FRect(-ox * scale, -oy * scale,
+                                      texture.width * scale, texture.height * scale))
+
+
+class _NSRect(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
+                ("w", ctypes.c_double), ("h", ctypes.c_double)]
+
+
+def raise_above_menu_bar():
+    """macOS only: lift pygame window to top and stretch over the whole screen"""
+    try:
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+
+        def send(obj, selector, restype=None, *args):
+            argtypes = [type(a) if isinstance(a, ctypes.Structure) else ctypes.c_long for a in args]
+            fn = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes)(("objc_msgSend", objc))
+            return fn(obj, objc.sel_registerName(selector), *args)
+
+        app = send(objc.objc_getClass(b"NSApplication"), b"sharedApplication", ctypes.c_void_p)
+        window = send(send(app, b"windows", ctypes.c_void_p), b"firstObject", ctypes.c_void_p)
+
+        nsscreen = send(window, b"screen", ctypes.c_void_p)
+        frame = send(nsscreen, b"frame", _NSRect)
+        send(window, b"setLevel:", None, 25)  # NSStatusWindowLevel, above the menu bar
+        send(window, b"setFrame:display:", None, frame, 1)
+    except Exception as e:
+        print(f"Could not cover the menu bar: {e}", file=sys.stderr)
 
 
 def collect_photos(path: str) -> list:
@@ -264,16 +304,46 @@ def collect_photos(path: str) -> list:
     return photos
 
 
+CONTROL_EVENT = pygame.USEREVENT + 1
+
+
+def read_control_commands():
+    """Forward commands from stdin (one per line, e.g. "next", "delay 8") to the
+    event loop. Used by gui.py, which runs the slideshow as a subprocess."""
+    for line in sys.stdin:
+        parts = line.split()
+        if parts:
+            pygame.event.post(pygame.event.Event(CONTROL_EVENT, command=parts[0], args=parts[1:]))
+    # stdin closed: the GUI is gone, so stop too
+    pygame.event.post(pygame.event.Event(CONTROL_EVENT, command="quit", args=[]))
+
+
+def list_displays():
+    pygame.init()
+    sizes = pygame.display.get_desktop_sizes()
+    print(json.dumps([{"index": i, "width": w, "height": h} for i, (w, h) in enumerate(sizes)]))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Full-screen photo slideshow")
-    parser.add_argument("path", help="Photo file or folder")
+    parser.add_argument("path", nargs="?", help="Photo file or folder")
     parser.add_argument("--delay", type=float, default=4.0,
                         help="Seconds each slide is shown (default: 7)")
     parser.add_argument("--no-shuffle", action="store_true",
                         help="Show photos in alphabetical order")
     parser.add_argument("--display", type=int, default=0,
                         help="Display index to use (0 = primary, 1 = second screen, etc.)")
+    parser.add_argument("--list-displays", action="store_true",
+                        help="Print the available displays as JSON and exit")
+    parser.add_argument("--control", action="store_true",
+                        help="Read commands from stdin and print status as JSON lines (used by gui.py)")
     args = parser.parse_args()
+
+    if args.list_displays:
+        list_displays()
+        return
+    if args.path is None:
+        parser.error("the following arguments are required: path")
 
     photos = collect_photos(args.path)
     if not args.no_shuffle:
@@ -285,14 +355,13 @@ def main():
     RESET = "\033[0m"
     SEP   = f"{DIM}{'─' * 40}{RESET}"
 
-    print(SEP)
-    print(f"{BOLD}{CYAN}  Found {len(photos)} photo(s).{RESET}  {DIM}delay: {args.delay}s · display: {args.display} · Q/Esc to quit{RESET}")
-    for i in range(5, -1, -1):
-        print(f"\r{CYAN}  Starting slideshow in {i}...{RESET}", end="", flush=True)
-        time.sleep(1)
-    print(f"\n{SEP}")
-
-    os.environ.setdefault("SDL_VIDEO_FULLSCREEN_HEAD", str(args.display))
+    if not args.control:
+        print(SEP)
+        print(f"{BOLD}{CYAN}  Found {len(photos)} photo(s).{RESET}  {DIM}delay: {args.delay}s · display: {args.display} · Q/Esc to quit{RESET}")
+        for i in range(5, -1, -1):
+            print(f"\r{CYAN}  Starting slideshow in {i}...{RESET}", end="", flush=True)
+            time.sleep(1)
+        print(f"\n{SEP}")
 
     pygame.init()
 
@@ -302,12 +371,16 @@ def main():
               f"Using display 0.", file=sys.stderr)
         args.display = 0
 
-    display_bounds = pygame.display.get_desktop_sizes()
-    screen_w, screen_h = display_bounds[args.display]
-    screen = pygame.display.set_mode(
-        (screen_w, screen_h), pygame.FULLSCREEN | pygame.NOFRAME, display=args.display
-    )
-    pygame.display.set_caption("Slideshow")
+    # Linear filtering makes sub-pixel pan/zoom positions blend smoothly
+    os.environ["SDL_RENDER_SCALE_QUALITY"] = "linear"
+    screen_w, screen_h = pygame.display.get_desktop_sizes()[args.display]
+    on_display = 0x2FFF0000 | args.display  # SDL_WINDOWPOS_CENTERED_DISPLAY
+    window = pygame.Window("Slideshow", size=(screen_w, screen_h),
+                           position=(on_display, on_display), borderless=True)
+    renderer = Renderer(window, vsync=True)
+    renderer.draw_color = (0, 0, 0, 255)
+    if sys.platform == "darwin":
+        raise_above_menu_bar()
     pygame.mouse.set_visible(False)
 
     delay_ms = int(args.delay * 1000)
@@ -336,74 +409,85 @@ def main():
         t.start()
 
     def get_image(idx):
-        """Return (surface, content_rect) for idx, loading synchronously if not cached."""
+        """Return (texture, content_rect, focus_point) for idx, loading synchronously if not cached."""
         with _preload_lock:
-            if idx in _preload_cache:
-                return _preload_cache.pop(idx)
-        return load_image(idx)
+            result = _preload_cache.pop(idx, None)
+        if result is None:
+            result = load_image(idx)
+        surface, crect, focus = result
+        if surface is None:
+            return None, None, None
+        texture = Texture.from_surface(renderer, surface)
+        texture.blend_mode = 1  # SDL_BLENDMODE_BLEND, so alpha works for the cross-fade
+        return texture, crect, focus
 
-    # --- initial state ---
+    # --- slide stack ---
+    # Photos stacked bottom to top, each {"texture", "crect", "kb", "start", "shown"}.
+    # The top one is the current photo. Each fades in over the ones below it, which
+    # keep animating, so skipping quickly layers fades instead of cutting them off.
+    # "shown" is real time and drives the fade, so skipping still fades while paused.
+    # "start" is on the slide clock, which stops while paused, and drives Ken Burns
+    # and auto-advance.
 
     index = 0
-    current_surface, current_crect, current_focus = get_image(index)
-    current_kb = new_kb_params(current_focus)
-    next_surface, next_crect, next_focus = None, None, None
-    next_kb = None
+    slides = []
+    paused_at = None      # real ticks when paused, None while running
+    paused_total = 0      # ms spent paused, so the slide clock skips them
 
-    # Preload next
+    def slide_clock():
+        if paused_at is not None:
+            return paused_at - paused_total
+        return pygame.time.get_ticks() - paused_total
+
+    def report_status():
+        if args.control:
+            print(json.dumps({"index": index, "total": len(photos), "paused": paused_at is not None,
+                              "delay": delay_ms / 1000, "photo": os.path.basename(photos[index])}),
+                  flush=True)
+
+    def push_slide(idx):
+        texture, crect, focus = get_image(idx)
+        slides.append({"texture": texture, "crect": crect, "kb": new_kb_params(focus),
+                       "start": slide_clock(), "shown": pygame.time.get_ticks()})
+
+    def advance(step):
+        nonlocal index
+        index = (index + step) % len(photos)
+        push_slide(index)
+        if step > 0:
+            preload((index + 1) % len(photos))
+        report_status()
+
+    def set_paused(paused):
+        nonlocal paused_at, paused_total
+        if paused and paused_at is None:
+            paused_at = pygame.time.get_ticks()
+        elif not paused and paused_at is not None:
+            paused_total += pygame.time.get_ticks() - paused_at
+            paused_at = None
+        report_status()
+
+    def set_delay(seconds):
+        nonlocal delay_ms
+        new_ms = int(max(1.0, seconds) * 1000)
+        # Keep each photo's Ken Burns position where it is, only change its pace
+        now = slide_clock()
+        for slide in slides:
+            slide["start"] = now - (now - slide["start"]) * new_ms / delay_ms
+        delay_ms = new_ms
+        report_status()
+
+    push_slide(index)
+    slides[0]["shown"] -= trans_ms  # first photo appears without fading in
     preload((index + 1) % len(photos))
+    report_status()
 
-    slide_start = pygame.time.get_ticks()
-    trans_start = None          # set when cross-fade begins
-    transitioning = False
-    frozen_frame = None         # last Ken Burns frame of current slide, used during fade-out
+    if args.control:
+        threading.Thread(target=read_control_commands, daemon=True).start()
 
-    clock = pygame.time.Clock()
     running = True
 
-    def begin_transition():
-        nonlocal next_surface, next_crect, next_focus, next_kb
-        nonlocal trans_start, transitioning, frozen_frame, index
-        nonlocal slide_start, current_surface, current_crect, current_kb
-
-        now = pygame.time.get_ticks()
-        elapsed = now - slide_start
-        t = min(1.0, elapsed / delay_ms)
-        if current_surface and current_kb and current_crect:
-            frozen_frame = render_kb_frame(current_surface, screen_w, screen_h, t, current_kb, current_crect)
-        else:
-            frozen_frame = None
-
-        index = (index + 1) % len(photos)
-        next_surface, next_crect, next_focus = get_image(index)
-        next_kb = new_kb_params(next_focus)
-        trans_start = pygame.time.get_ticks()
-        transitioning = True
-
-        preload((index + 1) % len(photos))
-
-    def begin_transition_prev():
-        nonlocal next_surface, next_crect, next_focus, next_kb
-        nonlocal trans_start, transitioning, frozen_frame, index
-        nonlocal slide_start, current_surface, current_crect, current_kb
-
-        now = pygame.time.get_ticks()
-        elapsed = now - slide_start
-        t = min(1.0, elapsed / delay_ms)
-        if current_surface and current_kb and current_crect:
-            frozen_frame = render_kb_frame(current_surface, screen_w, screen_h, t, current_kb, current_crect)
-        else:
-            frozen_frame = None
-
-        index = (index - 1) % len(photos)
-        next_surface, next_crect, next_focus = get_image(index)
-        next_kb = new_kb_params(next_focus)
-        trans_start = pygame.time.get_ticks()
-        transitioning = True
-
     while running:
-        now = pygame.time.get_ticks()
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -411,53 +495,52 @@ def main():
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     running = False
                 elif event.key in (pygame.K_RIGHT, pygame.K_SPACE):
-                    begin_transition()
+                    advance(1)
                 elif event.key == pygame.K_LEFT:
-                    begin_transition_prev()
+                    advance(-1)
+                elif event.key == pygame.K_p:
+                    set_paused(paused_at is None)
+            elif event.type == CONTROL_EVENT:
+                if event.command == "quit":
+                    running = False
+                elif event.command == "next":
+                    advance(1)
+                elif event.command == "prev":
+                    advance(-1)
+                elif event.command == "pause":
+                    set_paused(True)
+                elif event.command == "resume":
+                    set_paused(False)
+                elif event.command == "delay" and event.args:
+                    try:
+                        set_delay(float(event.args[0]))
+                    except ValueError:
+                        pass
 
-        if transitioning:
-            trans_elapsed = now - trans_start
-            alpha = min(255, int(255 * trans_elapsed / trans_ms))
+        # Read the clock after handling keys: a manual skip loads the next photo
+        # synchronously and sets its start, which must not be later than now
+        now = pygame.time.get_ticks()
+        slide_now = slide_clock()
 
-            # Draw frozen outgoing frame
-            screen.fill((0, 0, 0))
-            if frozen_frame:
-                screen.blit(frozen_frame, (0, 0))
+        # Drop photos hidden under one that has fully faded in
+        for i in range(len(slides) - 1, 0, -1):
+            if slides[i]["texture"] is not None and now - slides[i]["shown"] >= trans_ms:
+                del slides[:i]
+                break
 
-            # Draw incoming frame with increasing alpha
-            if next_surface and next_kb and next_crect:
-                t_next = min(1.0, trans_elapsed / delay_ms)
-                incoming = render_kb_frame(next_surface, screen_w, screen_h, t_next, next_kb, next_crect)
-                incoming.set_alpha(alpha)
-                screen.blit(incoming, (0, 0))
+        renderer.clear()
+        for slide in slides:
+            if slide["texture"] is None:
+                continue
+            alpha = min(255, int(255 * (now - slide["shown"]) / trans_ms))
+            # Ken Burns t keeps running from the start of the fade-in, so motion is continuous
+            t = min(1.0, (slide_now - slide["start"]) / delay_ms)
+            draw_kb_frame(slide["texture"], screen_w, screen_h, t, slide["kb"], slide["crect"], alpha)
+        renderer.present()
 
-            if trans_elapsed >= trans_ms:
-                # Transition done — next becomes current.
-                # Use trans_start (not now) so the Ken Burns t value is continuous
-                # through the transition and doesn't jump back to 0.
-                transitioning = False
-                current_surface = next_surface
-                current_crect = next_crect
-                current_kb = next_kb
-                next_surface, next_crect, next_focus = None, None, None
-                next_kb = None
-                frozen_frame = None
-                slide_start = trans_start
-        else:
-            slide_elapsed = now - slide_start
-            t = min(1.0, slide_elapsed / delay_ms)
-
-            screen.fill((0, 0, 0))
-            if current_surface and current_kb and current_crect:
-                frame = render_kb_frame(current_surface, screen_w, screen_h, t, current_kb, current_crect)
-                screen.blit(frame, (0, 0))
-
-            # Auto-advance
-            if slide_elapsed >= delay_ms:
-                begin_transition()
-
-        pygame.display.flip()
-        clock.tick(FPS)
+        # Auto-advance
+        if slide_now - slides[-1]["start"] >= delay_ms:
+            advance(1)
 
     pygame.quit()
 
